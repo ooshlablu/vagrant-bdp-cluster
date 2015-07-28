@@ -1,0 +1,35 @@
+---
+- hosts: test_bdp
+  remote_user: ubuntu
+  sudo: yes
+  vars:
+    riak_group_name: test_bdp
+    use_official_repos: False
+    create_riak_cluster: True
+    packages:
+      ubuntu:
+        '12.04':
+          data-platform-ee: 'http://private.downloads.basho.com/data-platform-ee/1.0/1.0.0/ubuntu/precise/data-platform-ee_1.0.0-1_amd64.deb'
+          data-platform-extras: 'http://private.downloads.basho.com/data-platform-ee/1.0/1.0.0/ubuntu/precise/data-platform-extras_1.0.0-1_amd64.deb'
+      centos:
+        '7':
+          data-platform-ee: 'http://private.downloads.basho.com/data-platform-ee/1.0/1.0.0/el/7/data-platform-ee-1.0.0-1.el7.centos.x86_64.rpm'
+          data-platform-extras: 'http://private.downloads.basho.com/data-platform-ee/1.0/1.0.0/el/7/data-platform-extras-1.0.0-1.x86_64.rpm'
+    riak_pb_port: 8087
+    riak_http_port: 8098
+    riak_leader_election_port: 5323
+    cache_proxy_hosts: 0.0.0.0
+    #cache_proxy_port: 11211
+    cache_proxy_port: 22122
+    #cache_proxy_stats_port: 22223
+    cache_proxy_stats_port: 22123
+    cache_ttl: '15s'
+    redis_port: 6379
+    #spark_master_port: 7777
+    spark_master_port: 7077
+    riak_kv_servers: "{% for host in groups[riak_group_name] %}{{ hostvars[host][default_interfaces[os][os_variant]]['ipv4']['address'] }}:{{ riak_pb_port }}{% if not loop.last %},{% endif %}{% endfor %}"
+    riak_leader_election_servers: "{% for host in groups[riak_group_name] %}{{ hostvars[host][default_interfaces[os][os_variant]]['ipv4']['address'] }}:{{ riak_leader_election_port }}{% if not loop.last %},{% endif %}{% endfor %}"
+    redis_servers: "{% for host in groups[riak_group_name] %}{{ hostvars[host][default_interfaces[os][os_variant]]['ipv4']['address'] }}:{{ redis_port }}{% if not loop.last %},{% endif %}{% endfor %}"
+    spark_master_url: "spark://{% for host in groups[riak_group_name] %}{{ hostvars[host][default_interfaces[os][os_variant]]['ipv4']['address'] }}:{{ spark_master_port }}{% if not loop.last %},{% endif %}{% endfor %}"
+  roles:
+     - build_bdp

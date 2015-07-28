@@ -1,0 +1,167 @@
+---
+- include_vars: vagrant.yml
+  when: ansible_ssh_user == 'vagrant'
+
+- include_vars: Redhat.yml
+  when: ansible_os_family  == "RedHat"
+
+- include: RedHat.yml
+  when: ansible_os_family  == "RedHat"
+
+- include: Debian.yml
+  when: ansible_os_family  == "Debian"
+
+- include: Ubuntu.yml
+  when: ansible_distribution == "Ubuntu"
+
+- name: copying custom beams
+  copy: src={{ item }} dest="{{ riak_patch_dir }}/"
+  with_fileglob:
+  - "{{riak_custom_beams_dir}}/*.beam"
+  when: riak_custom_beams_dir is defined
+  #notify:
+  #- restart riak
+  #- wait for http
+  #- wait for kv
+
+- name: configure riak.conf
+  template: src=etc_riak_riak.conf.j2 dest=/etc/riak/riak.conf
+  tags: configfiles
+  #notify:
+  #- restart riak
+  #- wait for http
+  #- wait for kv
+
+- name: fix aws hostname
+  lineinfile: dest=/etc/hosts line="{{ ansible_default_ipv4['address'] }} {{ hostvars[inventory_hostname]['ansible_nodename'] }} ip-{{ ansible_default_ipv4['address'] | regex_replace('\.', '-')  }}"
+  when: '".ec2.internal" in ansible_nodename'
+
+- name: start riak
+  service: name=riak enabled=yes state=started
+
+- name: wait for port {{ riak_http_port }} to become active
+  wait_for: port={{ riak_http_port }}
+
+- name: wait for riak_kv service to start
+  riak: wait_for_service=kv
+
+- name: ping riak
+  riak: command=ping
+  register: info
+
+- name: Check Riak Members
+  shell: 'riak-admin cluster status'
+  register: riak_member_status
+  tags: configuration
+
+- name: Join the Riak cluster
+  riak: command=join target_node=riak@{{ riak_leader }}
+  when: inventory_hostname != groups[riak_group_name][0] and riak_member_status.stdout.find(riak_leader) == -1 and create_riak_cluster == True
+  tags:
+    - configuration
+    - cluster
+
+- name: Check Riak Ring
+  shell: 'riak-admin cluster status'
+  register: riak_ring_status
+  tags: configuration
+
+- name: Plan the Riak cluster
+  riak: command=plan wait_for_ring=300
+  when: inventory_hostname == groups[riak_group_name][0] and riak_ring_status.stdout.find('joining') > 0 and create_riak_cluster == True
+  tags:
+    - configuration
+    - cluster
+
+- name: Commit the Riak cluster
+  riak: command=commit wait_for_handoffs=300
+  when: inventory_hostname == groups[riak_group_name][0] and riak_ring_status.stdout.find('joining') > 0 and create_riak_cluster == True
+  tags:
+    - configuration
+    - cluster
+
+- name: Create the BDP Cluster
+  shell: data-platform-admin join riak@{{ riak_leader }}
+  when: inventory_hostname != groups[riak_group_name][0]
+  tags:
+   - configuration
+    - cluster_bdp
+
+- name: Verify BDP Cluster
+  action:  
+    shell data-platform-admin services
+  register: bdp_status
+  until: bdp_status.rc == 0
+  retries: 6
+  delay: 10
+
+- name: Create cache proxy config
+  shell: 'data-platform-admin add-service-config my-cache-proxy cache-proxy HOSTS="0.0.0.0" CACHE_PROXY_PORT="{{ cache_proxy_port }}" CACHE_PROXY_STATS_PORT="{{ cache_proxy_stats_port }}" CACHE_TTL="{{ cache_ttl }}" RIAK_KV_SERVERS="{{ riak_kv_servers }}" REDIS_SERVERS="{{ redis_servers }}"'
+  tags:
+    - configuration
+
+- name: Create redis service config
+  shell: 'data-platform-admin add-service-config my-redis redis HOST="0.0.0.0" REDIS_PORT="{{ redis_port }}"'
+  tags:
+    - configuration
+
+- name: Create spark master config
+  shell: 'data-platform-admin add-service-config my-spark-master spark-master LEAD_ELECT_SERVICE_HOSTS="{{ riak_leader_election_servers }}" RIAK_HOSTS="{{ riak_kv_servers }}"'
+  tags:
+    - configuration
+
+- name: Create spark worker config
+  shell: 'data-platform-admin add-service-config my-spark-worker spark-worker MASTER_URL="{{ spark_master_url }}"'
+  tags:
+    - configuration
+
+- name: Create spark bucket in riak
+  shell: "{{ item }}"
+  with_items:
+    - "sudo riak-admin bucket-type create strong '{\"props\":{\"consistent\":true}}'"
+    - "sudo riak-admin bucket-type create maps '{\"props\":{\"datatype\":\"map\"}}'"
+    - "sudo riak-admin bucket-type activate maps"
+    - "sudo riak-admin bucket-type status maps"
+  when: inventory_hostname == groups[riak_group_name][0]
+  tags:
+    - configuration
+
+- name: Start Redis
+  shell:  'data-platform-admin start-service riak@{{ riak_local_ip }} my-cache-group my-redis'
+  tags:
+    - configuration
+
+- name: Wait for Redis to start
+  wait_for: port={{ redis_port }}
+  tags:
+    - configuration
+
+- name: Start Cache Proxy
+  shell:  'data-platform-admin start-service riak@{{ riak_local_ip }} my-cache-group my-cache-proxy'
+  tags:
+    - configuration
+
+- name: Wait for Cache Proxy to start
+  wait_for: port={{ cache_proxy_port }} delay=60 timeout=3600
+  tags:
+    - configuration
+
+- name: Start Spark Master
+  shell:  'data-platform-admin start-service riak@{{ riak_local_ip }} my-analysis-group my-spark-master'
+  tags:
+    - configuration
+
+- name: Wait for Spark Master to start
+  wait_for: port={{ spark_master_port }}
+  tags:
+    - configuration
+
+- name: Start Spark Worker
+  shell:  'data-platform-admin start-service riak@{{ riak_local_ip }} my-analysis-group my-spark-worker'
+  tags:
+    - configuration
+
+#- name: Wait for Spark worker to start
+#  wait_for: port={{ spark_master_port }}
+#  tags:
+#    - configuration

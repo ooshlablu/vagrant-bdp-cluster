@@ -1,0 +1,9 @@
+default_interfaces:
+  ubuntu:
+    '12.04': ansible_eth1
+  centos:
+    '6': ansible_eth1
+    '7': ansible_enp0s8
+    
+riak_leader: "{{ hostvars[groups[riak_group_name][0]][default_interfaces[os][os_variant]]['ipv4']['address'] }}"
+riak_local_ip: "{{ hostvars[ansible_hostname][default_interfaces[os][os_variant]]['ipv4']['address'] }}"
